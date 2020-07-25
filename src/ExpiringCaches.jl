@@ -164,14 +164,18 @@ macro cacheable(timeout, func)
     cacheName = gensym()
     return esc(quote
         const $cacheName = ExpiringCaches.Cache{Tuple{$(argTypes...)}, $returnType}($timeout)
+        $internalFunction
         function $funcName(args...)::$returnType
             return get!($cacheName, args) do
                 $internalFuncName(args...)
             end
         end
-        $internalFunction
+        ExpiringCaches.getcache(f::typeof($funcName)) = $cacheName
+        $funcName
     end)
 end
+
+function getcache end
 
 # @cacheable Dates.Minute(2) function foo(arg1::Int, arg2::String)::ReturnType
 #     x = x + 1
