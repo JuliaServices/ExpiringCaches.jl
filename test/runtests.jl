@@ -1,5 +1,10 @@
 using Test, Dates, ExpiringCaches
 
+"""
+    foo(arg1::Int, arg2::String)
+
+Some docs to check that it doesn't break.
+"""
 ExpiringCaches.@cacheable Dates.Second(3) function foo(arg1::Int, arg2::String)::Float64
     sleep(2)
     return arg1 / length(arg2)
