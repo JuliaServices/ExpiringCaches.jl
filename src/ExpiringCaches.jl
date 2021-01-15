@@ -165,9 +165,9 @@ macro cacheable(timeout, func)
     return esc(quote
         const $cacheName = ExpiringCaches.Cache{Tuple{$(argTypes...)}, $returnType}($timeout)
         $internalFunction
-        Base.@__doc__ function $funcName(args...)::$returnType
-            return get!($cacheName, args) do
-                $internalFuncName(args...)
+        Base.@__doc__ function $funcName($(funcArgs...))::$returnType
+            return get!($cacheName, tuple($(funcArgs...))) do
+                $internalFuncName($(funcArgs...))
             end
         end
         ExpiringCaches.getcache(f::typeof($funcName)) = $cacheName
