@@ -92,9 +92,9 @@ end
 
 function Base.setindex!(cache::Cache{K, V}, val::V, key::K) where {K, V}
     lock(cache.lock) do
-        val = TimestampedValue{V}(val)
-        cache.cache[key] = val
-        ts = timestamp(val)
+        val1 = TimestampedValue{V}(val)
+        cache.cache[key] = val1
+        ts = timestamp(val1)
         if cache.purge_on_timeout
             Timer(div(Dates.toms(cache.timeout), 1000)) do _
                 lock(cache.lock) do
