@@ -11,7 +11,7 @@ The package is registered in the [`General`](https://github.com/JuliaRegistries/
 
 
 ### `Cache`
-    ExpiringCaches.Cache{K, V}(timeout::Dates.Period)
+    ExpiringCaches.Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false)
 
 Create a thread-safe, expiring cache where values older than `timeout`
 are "invalid" and will be deleted.
