@@ -48,8 +48,13 @@ tm = @elapsed foo(1, "ffff")
 cache = ExpiringCaches.Cache{Int, Int}(Dates.Second(5); purge_on_timeout=true)
 cache[1] = 2
 @test !isempty(cache)
-sleep(5.5)
-# key is purged w/o being accessed
+sleep(3)
+cache[1] = 3
+sleep(2.5)
+# key isn't purged because we replaced it, so timer is "reset"
+@test !isempty(cache)
+sleep(3)
+# key is now purged w/o being accessed
 @test isempty(cache)
 
 end

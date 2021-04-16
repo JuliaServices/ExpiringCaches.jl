@@ -11,6 +11,7 @@ end
 
 TimestampedValue(x::T) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
 TimestampedValue{T}(x) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
+timestamp(x::TimestampedValue) = x.timestamp
 
 """
     ExpiringCaches.Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false)
@@ -91,11 +92,17 @@ end
 
 function Base.setindex!(cache::Cache{K, V}, val::V, key::K) where {K, V}
     lock(cache.lock) do
-        cache.cache[key] = TimestampedValue{V}(val)
+        val = TimestampedValue{V}(val)
+        cache.cache[key] = val
+        ts = timestamp(val)
         if cache.purge_on_timeout
             Timer(div(Dates.toms(cache.timeout), 1000)) do _
                 lock(cache.lock) do
-                    delete!(cache.cache, key)
+                    val2 = get(cache.cache, key, nothing)
+                    # only delete if timestamp of original key matches
+                    if val2 !== nothing && timestamp(val2) == ts
+                        delete!(cache.cache, key)
+                    end
                 end
             end
         end
