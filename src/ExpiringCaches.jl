@@ -13,7 +13,7 @@ TimestampedValue(x::T) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
 TimestampedValue{T}(x) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
 
 """
-    ExpiringCaches.Cache{K, V}(timeout::Dates.Period)
+    ExpiringCaches.Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false)
 
 Create a thread-safe, expiring cache where values older than `timeout`
 are "invalid" and will be deleted.
@@ -24,13 +24,20 @@ calculating a value is expensive and is able to be "cached" for a certain
 amount of time. To avoid using the cache (i.e. to invalidate the cache),
 a `Cache` supports the `delete!` and `empty!` methods to remove values
 manually.
+
+By default, expired keys will remain in the cache until requested (via
+`haskey` or `get`); if `purge_on_timeout=true` keyword argument is passed,
+then an async task will be spawned for each key upon entry. When the
+timeout task has waited `timeout` length of time, the key will be removed
+from the cache.
 """
 struct Cache{K, V, P <: Dates.Period} <: AbstractDict{K, V}
     lock::ReentrantLock
     cache::Dict{K, TimestampedValue{V}}
     timeout::P
+    purge_on_timeout::Bool
 end
-Cache{K, V}(timeout::Dates.Period=Dates.Minute(1)) where {K, V} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), timeout)
+Cache{K, V}(timeout::Dates.Period=Dates.Minute(1); purge_on_timeout::Bool=false) where {K, V} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), timeout, purge_on_timeout)
 
 expired(x::TimestampedValue, timeout) = (Dates.now(Dates.UTC) - x.timestamp) > timeout
 
@@ -85,6 +92,13 @@ end
 function Base.setindex!(cache::Cache{K, V}, val::V, key::K) where {K, V}
     lock(cache.lock) do
         cache.cache[key] = TimestampedValue{V}(val)
+        if cache.purge_on_timeout
+            Timer(div(Dates.toms(cache.timeout), 1000)) do _
+                lock(cache.lock) do
+                    delete!(cache.cache, key)
+                end
+            end
+        end
         return val
     end
 end

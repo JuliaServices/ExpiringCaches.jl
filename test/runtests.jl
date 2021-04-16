@@ -45,4 +45,11 @@ sleep(3)
 tm = @elapsed foo(1, "ffff")
 @test tm > 2 # test that normal function body was executed
 
+cache = ExpiringCaches.Cache{Int, Int}(Dates.Second(5); purge_on_timeout=true)
+cache[1] = 2
+@test !isempty(cache)
+sleep(5.5)
+# key is purged w/o being accessed
+@test isempty(cache)
+
 end
