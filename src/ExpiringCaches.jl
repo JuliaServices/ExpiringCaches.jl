@@ -235,7 +235,7 @@ function getcache end
 # function foo(args...)::ReturnType
 #     return get!(CACHE_foo_Int_String, args) do
 #         _foo(args...)
-#     en.d
+#     end
 # end
 # function _foo(arg1::Int, arg2::String)::ReturnType
 #     # ...
