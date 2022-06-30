@@ -1,18 +1,23 @@
 using Test, Dates, ExpiringCaches
+using ExpiringCaches: @cacheable
 
 """
     foo(arg1::Int, arg2::String)
 
 Some docs to check that it doesn't break.
 """
-ExpiringCaches.@cacheable Dates.Second(3) function foo(arg1::Int, arg2::String)::Float64
+@cacheable ExpireOnAccess(Dates.Second(3)) function foo(arg1::Int, arg2::String)::Float64
     sleep(2)
+    return arg1 / length(arg2)
+end
+
+@cacheable Dates.Second(3) function foo2(arg1::Int, arg2::String)::Float64
     return arg1 / length(arg2)
 end
 
 @testset "ExpiringCaches" begin
 
-cache = ExpiringCaches.Cache{Int, Int}(Dates.Second(5))
+cache = ExpiringCaches.Cache{Int, Int}(ExpireOnAccess(Dates.Second(5)))
 @test length(cache) == 0
 @test isempty(cache)
 
@@ -45,7 +50,7 @@ sleep(3)
 tm = @elapsed foo(1, "ffff")
 @test tm > 2 # test that normal function body was executed
 
-cache = ExpiringCaches.Cache{Int, Int}(Dates.Second(5); purge_on_timeout=true)
+cache = ExpiringCaches.Cache{Int, Int}(ExpireOnTimeout(Dates.Second(5)))
 cache[1] = 2
 @test !isempty(cache)
 sleep(3)

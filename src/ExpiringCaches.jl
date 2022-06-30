@@ -2,7 +2,7 @@ module ExpiringCaches
 
 using Dates
 
-export Cache, @cacheable
+export Cache, @cacheable, ExpireOnAccess, ExpireOnTimeout
 
 struct TimestampedValue{T}
     value::T
@@ -12,12 +12,51 @@ end
 TimestampedValue(x::T) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
 TimestampedValue{T}(x) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
 timestamp(x::TimestampedValue) = x.timestamp
+expired(x::TimestampedValue, timeout) =  (Dates.now(Dates.UTC) - x.timestamp) > timeout
 
 """
-    ExpiringCaches.Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false)
+Abstract type for cache eviction policy
+"""
+abstract type AbstractStrategy end
 
-Create a thread-safe, expiring cache where values older than `timeout`
-are "invalid" and will be deleted.
+"""
+Evaluate expiration of value `x` given the strategy `s`.
+"""
+function expired end
+
+"""
+Set trigger for expiration of the (`key`,`val`) pair given the strategy.
+"""
+function expire!(val::V, key::K, s::S) where {K, V, S <: AbstractStrategy} end
+
+"""
+A value is evicted if it was present in cache longer then `timeout`.
+The eviction occurs during the access to the cached value.
+Expired keys will remain in the cache until requested (via
+`haskey` or `get`).
+"""
+struct ExpireOnAccess{P <: Dates.Period} <: AbstractStrategy
+    timeout::P
+end
+expired(x::TimestampedValue, s::ExpireOnAccess) = expired(x, s.timeout)
+
+"""
+A value is evicted if it was present in cache longer then `timeout`.
+The eviction occurs immediately after expiration timeout.
+An async task will be spawned for each key upon entry. When the
+timeout task has waited `timeout` length of time, the key will be removed
+from the cache.
+"""
+struct ExpireOnTimeout{P <: Dates.Period} <: AbstractStrategy
+    timeout::P
+end
+expired(x::TimestampedValue, s::ExpireOnTimeout) = expired(x, s.timeout)
+
+"""
+    ExpiringCaches.Cache{K, V}(strategy::AbstractStrategy)
+
+Create a thread-safe, expiring cache where value eviction  is determined by
+`strategy`.
 
 An `ExpiringCaches.Cache` is an `AbstractDict` and tries to emulate a regular
 `Dict` in all respects. It is most useful when the cost of retrieving or
@@ -32,15 +71,13 @@ then an async task will be spawned for each key upon entry. When the
 timeout task has waited `timeout` length of time, the key will be removed
 from the cache.
 """
-struct Cache{K, V, P <: Dates.Period} <: AbstractDict{K, V}
+struct Cache{K, V, S <: AbstractStrategy} <: AbstractDict{K, V}
     lock::ReentrantLock
     cache::Dict{K, TimestampedValue{V}}
-    timeout::P
-    purge_on_timeout::Bool
+    strategy::S
 end
-Cache{K, V}(timeout::Dates.Period=Dates.Minute(1); purge_on_timeout::Bool=false) where {K, V} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), timeout, purge_on_timeout)
-
-expired(x::TimestampedValue, timeout) = (Dates.now(Dates.UTC) - x.timestamp) > timeout
+Cache{K, V}(strategy::S = ExpireOnAccess(Dates.Minute(1))) where {K, V, S <: AbstractStrategy} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), strategy)
+Cache{K, V}(timeout::Dates.Period) where {K, V} = Cache{K,V}(ExpireOnAccess(timeout))
 
 function Base.iterate(x::Cache)
     lock(x.lock)
@@ -49,7 +86,7 @@ function Base.iterate(x::Cache)
         unlock(x.lock)
         return nothing
     end
-    while expired(state[1][2], x.timeout)
+    while expired(state[1][2], x.strategy)
         state = iterate(x.cache, state[2])
         if state === nothing
             unlock(x.lock)
@@ -65,7 +102,7 @@ function Base.iterate(x::Cache, st)
         unlock(x.lock)
         return nothing
     end
-    while expired(state[1][2], x.timeout)
+    while expired(state[1][2], x.strategy)
         state = iterate(x.cache, state[2])
         if state === nothing
             unlock(x.lock)
@@ -79,7 +116,7 @@ function Base.haskey(cache::Cache{K, V}, k::K) where {K, V}
     lock(cache.lock) do
         if haskey(cache.cache, k)
             x = cache.cache[k]
-            if !expired(x, cache.timeout)
+            if !expired(x, cache.strategy)
                 return true
             else
                 delete!(cache.cache, k)
@@ -92,20 +129,9 @@ end
 
 function Base.setindex!(cache::Cache{K, V}, val::V, key::K) where {K, V}
     lock(cache.lock) do
-        val1 = TimestampedValue{V}(val)
-        cache.cache[key] = val1
-        ts = timestamp(val1)
-        if cache.purge_on_timeout
-            Timer(div(Dates.toms(cache.timeout), 1000)) do _
-                lock(cache.lock) do
-                    val2 = get(cache.cache, key, nothing)
-                    # only delete if timestamp of original key matches
-                    if val2 !== nothing && timestamp(val2) == ts
-                        delete!(cache.cache, key)
-                    end
-                end
-            end
-        end
+        val_ts = TimestampedValue{V}(val)
+        cache.cache[key] = val_ts
+        expire!(val_ts, key, cache.strategy)
         return val
     end
 end
@@ -114,7 +140,7 @@ function Base.get(cache::Cache{K, V}, key::K, default::V) where {K, V}
     lock(cache.lock) do
         if haskey(cache.cache, key)
             x = cache.cache[key]
-            if expired(x, cache.timeout)
+            if expired(x, cache.strategy)
                 delete!(cache.cache, key)
                 return default
             else
@@ -130,7 +156,7 @@ function Base.get!(cache::Cache{K, V}, key::K, default::V) where {K, V}
     lock(cache.lock) do
         if haskey(cache.cache, key)
             x = cache.cache[key]
-            if expired(x, cache.timeout)
+            if expired(x, cache.strategy)
                 return setindex!(cache, default, key)
             else
                 return x.value
@@ -145,7 +171,7 @@ function Base.get!(f::Function, cache::Cache{K, V}, key::K) where {K, V}
     lock(cache.lock) do
         if haskey(cache.cache, key)
             x = cache.cache[key]
-            if expired(x, cache.timeout)
+            if expired(x, cache.strategy)
                 return setindex!(cache, f()::V, key)
             else
                 return x.value
@@ -161,16 +187,16 @@ Base.empty!(cache::Cache) = lock(() -> empty!(cache.cache), cache.lock)
 Base.length(cache::Cache) = length(cache.cache)
 
 """
-    @cacheable timeout function_definition::ReturnType
+    @cacheable strategy function_definition::ReturnType
 
 For a function definition (`function_definition`, either short-form
-or full), create an `ExpiringCaches.Cache` and store results for `timeout`
+or full), create an `ExpiringCaches.Cache` and use eviction `strategy`
 (hashed by the exact input arguments obviously).
 
 Note that the function definition _MUST_ include the `ReturnType` declartion
 as this is used as the value (`V`) type in the `Cache`.
 """
-macro cacheable(timeout, func)
+macro cacheable(strategy, func)
     @assert func.head == :function
     func.args[1].head == :(::) || throw(ArgumentError("@cacheable function must specify return type: $func"))
     returnType = func.args[1].args[2]
@@ -184,7 +210,7 @@ macro cacheable(timeout, func)
     internalFunction = Expr(:function, sig, functionBody)
     cacheName = gensym()
     return esc(quote
-        const $cacheName = ExpiringCaches.Cache{Tuple{$(argTypes...)}, $returnType}($timeout)
+        const $cacheName = ExpiringCaches.Cache{Tuple{$(argTypes...)}, $returnType}($strategy)
         $internalFunction
         Base.@__doc__ function $funcName($(funcArgs...))::$returnType
             return get!($cacheName, tuple($(funcArgs...))) do
@@ -209,10 +235,24 @@ function getcache end
 # function foo(args...)::ReturnType
 #     return get!(CACHE_foo_Int_String, args) do
 #         _foo(args...)
-#     end
+#     en.d
 # end
 # function _foo(arg1::Int, arg2::String)::ReturnType
 #     # ...
 # end
+
+function expire!(val::TimestampedValue{V}, key::K,
+                 cache::Cache{K,V,ExpireOnTimeout}) where {K, V}
+    ts = timestamp(val)
+    Timer(div(Dates.toms(s.timeout), 1000)) do _
+        lock(cache.lock) do
+            val2 = get(cache.cache, key, nothing)
+            # only delete if timestamp of original key matches
+            if val2 !== nothing && timestamp(val2) == ts
+                delete!(cache.cache, key)
+            end
+        end
+    end
+end
 
 end # module
