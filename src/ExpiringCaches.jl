@@ -207,32 +207,44 @@ Base.length(cache::Cache) = length(cache.cache)
 """
     @cacheable strategy function_definition::ReturnType
 
-For a function definition (`function_definition`, either short-form
-or full), create an `ExpiringCaches.Cache` and use eviction `strategy`
-(hashed by the exact input arguments obviously).
+Cache the results of a named function using eviction `strategy`. Both full and
+short-form definitions support named positional arguments, with or without type
+annotations and default values. Cache keys contain the actual argument values,
+so an omitted default and the same explicit value share an entry.
 
-Note that the function definition _MUST_ include the `ReturnType` declartion
-as this is used as the value (`V`) type in the `Cache`.
+The function must declare `ReturnType`, which is also the cache's value type.
+Keyword arguments, variadic arguments, and `where` parameters are not supported.
 """
 macro cacheable(strategy, func)
-    @assert func.head == :function
-    func.args[1].head == :(::) || throw(ArgumentError("@cacheable function must specify return type: $func"))
+    func isa Expr && func.head in (:function, :(=)) || throw(ArgumentError("@cacheable expects a function definition"))
+    func.args[1] isa Expr && func.args[1].head == :(::) || throw(ArgumentError("@cacheable function must specify return type: $func"))
     returnType = func.args[1].args[2]
     sig = func.args[1].args[1]
+    sig isa Expr && sig.head == :call || throw(ArgumentError("@cacheable requires a named function with positional arguments"))
     functionBody = func.args[2]
     funcName = sig.args[1]
-    internalFuncName = Symbol("__$funcName")
-    sig.args[1] = internalFuncName
+    internalFuncName = gensym(:cacheable)
     funcArgs = sig.args[2:end]
-    argTypes = map(x->x.args[2], funcArgs)
-    internalFunction = Expr(:function, sig, functionBody)
+    args = map(funcArgs) do arg
+        arg = arg isa Expr && arg.head == :kw ? arg.args[1] : arg
+        if arg isa Symbol
+            return (arg, :Any)
+        elseif arg isa Expr && arg.head == :(::) && length(arg.args) == 2 && arg.args[1] isa Symbol
+            return (arg.args[1], arg.args[2])
+        end
+        throw(ArgumentError("@cacheable supports named positional arguments only"))
+    end
+    argNames = first.(args)
+    argTypes = last.(args)
+    internalSig = Expr(:(::), Expr(:call, internalFuncName, funcArgs...), returnType)
+    internalFunction = Expr(:function, internalSig, functionBody)
     cacheName = gensym()
     return esc(quote
         const $cacheName = ExpiringCaches.Cache{Tuple{$(argTypes...)}, $returnType}($strategy)
         $internalFunction
         Base.@__doc__ function $funcName($(funcArgs...))::$returnType
-            return get!($cacheName, tuple($(funcArgs...))) do
-                $internalFuncName($(funcArgs...))
+            return get!($cacheName, tuple($(argNames...))) do
+                $internalFuncName($(argNames...))
             end
         end
         ExpiringCaches.getcache(f::typeof($funcName)) = $cacheName
@@ -241,23 +253,6 @@ macro cacheable(strategy, func)
 end
 
 function getcache end
-
-# @cacheable Dates.Minute(2) function foo(arg1::Int, arg2::String)::ReturnType
-#     x = x + 1
-#     y = y * 2
-#     return foobar
-# end
-# @cacheable Dates.Minute(2) foo(arg1::Int, arg2::Int)::String = # ...
-
-# const CACHE_foo_Int_String = Cache{Tuple{Int, String}, ReturnType}(timeout)
-# function foo(args...)::ReturnType
-#     return get!(CACHE_foo_Int_String, args) do
-#         _foo(args...)
-#     end
-# end
-# function _foo(arg1::Int, arg2::String)::ReturnType
-#     # ...
-# end
 
 function expire!(val::TimestampedValue{V}, key::K,
                  cache::Cache{K,V,<:ExpireOnTimeout}) where {K, V}

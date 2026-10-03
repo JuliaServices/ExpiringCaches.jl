@@ -38,11 +38,20 @@ cache = ExpiringCaches.Cache{String, Int}(
 
 
 ### `@cacheable`
-    @cacheable timeout function_definition::ReturnType
+    @cacheable strategy function_definition::ReturnType
 
-For a function definition (`function_definition`, either short-form
-or full), create an `ExpiringCaches.Cache` and store results for `timeout`
-(hashed by the exact input arguments obviously).
+Cache a function's results using an eviction strategy or timeout. Full and
+short-form definitions support named positional arguments with optional type
+annotations and default values:
 
-Note that the function definition _MUST_ include the `ReturnType` declartion
-as this is used as the value (`V`) type in the `Cache`.
+```julia
+@cacheable Dates.Minute(1) function add(one, two::Int=2)::Int
+    one + two
+end
+
+add(1)       # computes and caches 3
+add(1, 2)    # returns the same cached value
+```
+
+The return type is required and determines the cache's value type. Keyword
+arguments, variadic arguments, and `where` parameters are not supported.
