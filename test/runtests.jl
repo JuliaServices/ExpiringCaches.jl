@@ -64,7 +64,7 @@ end
     end
     take!(started)
     second = @async get!(() -> 2, cache, 2)
-    status = timedwait(() -> istaskdone(second), 5)
+    status = timedwait(() -> istaskdone(second), 5.0)
     put!(release, nothing)
     @test status == :ok
     @test fetch(first) == 1
@@ -83,7 +83,7 @@ end
         end
         take!(started)
         writer = @async setindex!(cache, newer, 1)
-        status = timedwait(() -> istaskdone(writer), 5)
+        status = timedwait(() -> istaskdone(writer), 5.0)
         put!(release, nothing)
         @test status == :ok
         fetch(writer)
