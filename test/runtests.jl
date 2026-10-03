@@ -15,6 +15,36 @@ end
     return arg1 / length(arg2)
 end
 
+const untyped_calls = Ref(0)
+@cacheable Dates.Minute(1) function cached_untyped(one, two::Int)::Nothing
+    untyped_calls[] += 1
+    nothing
+end
+
+const default_calls = Ref(0)
+@cacheable Dates.Minute(1) function cached_defaults(one::Int, two::Int=2, three=one+two)::Int
+    default_calls[] += 1
+    one + two + three
+end
+
+const short_calls = Ref(0)
+@cacheable Dates.Minute(1) cached_short(one::Int)::Int = (short_calls[] += 1; one + 1)
+
+const conversion_calls = Ref(0)
+@cacheable Dates.Minute(1) function cached_conversion(one::Int)::Float64
+    conversion_calls[] += 1
+    one
+end
+
+module QualifiedCacheable
+    const calls = Ref(0)
+    function cached end
+end
+@cacheable Dates.Minute(1) function QualifiedCacheable.cached(one::Int)::Int
+    QualifiedCacheable.calls[] += 1
+    one + 1
+end
+
 struct RecordingStrategy <: ExpiringCaches.AbstractStrategy
     keys::Vector{Int}
 end
@@ -48,6 +78,37 @@ sleep(5)
 cache[1] = 5
 @test !isempty(cache)
 @test isempty(empty!(cache))
+
+@testset "cacheable function signatures" begin
+    @test cached_untyped(1, 2) === nothing
+    @test cached_untyped(1, 2) === nothing
+    @test untyped_calls[] == 1
+    @test cached_untyped("one", 2) === nothing
+    @test cached_untyped("one", 2) === nothing
+    @test untyped_calls[] == 2
+
+    @test cached_defaults(1) == 6
+    @test cached_defaults(1, 2) == 6
+    @test cached_defaults(1, 2, 3) == 6
+    @test default_calls[] == 1
+    @test cached_defaults(1, 4) == 10
+    @test cached_defaults(1, 4, 5) == 10
+    @test default_calls[] == 2
+    @test cached_defaults(1, 4, 3) == 8
+    @test default_calls[] == 3
+
+    @test cached_short(1) == 2
+    @test cached_short(1) == 2
+    @test short_calls[] == 1
+
+    @test cached_conversion(1) === 1.0
+    @test cached_conversion(1) === 1.0
+    @test conversion_calls[] == 1
+
+    @test QualifiedCacheable.cached(1) == 2
+    @test QualifiedCacheable.cached(1) == 2
+    @test QualifiedCacheable.calls[] == 1
+end
 
 @testset "timeout evicts stored values" begin
     cache = Cache{Int, Int}(ExpireOnTimeout(Dates.Millisecond(800)))
