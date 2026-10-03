@@ -15,6 +15,12 @@ end
     return arg1 / length(arg2)
 end
 
+struct RecordingStrategy <: ExpiringCaches.AbstractStrategy
+    keys::Vector{Int}
+end
+ExpiringCaches.expired(::ExpiringCaches.TimestampedValue, ::RecordingStrategy) = false
+ExpiringCaches.expire!(val, key, strategy::RecordingStrategy) = push!(strategy.keys, key)
+
 @testset "ExpiringCaches" begin
 
 cache = ExpiringCaches.Cache{Int, Int}(ExpireOnAccess(Dates.Second(5)))
@@ -42,6 +48,33 @@ sleep(5)
 cache[1] = 5
 @test !isempty(cache)
 @test isempty(empty!(cache))
+
+@testset "timeout evicts stored values" begin
+    cache = Cache{Int, Int}(ExpireOnTimeout(Dates.Millisecond(800)))
+    cache[1] = 2
+    sleep(0.05)
+    @test length(cache) == 1
+    @test timedwait(() -> length(cache) == 0, 5.0) == :ok
+    @test isempty(cache)
+end
+
+@testset "custom strategy expiration hook" begin
+    strategy = RecordingStrategy(Int[])
+    cache = Cache{Int, Int}(strategy)
+    cache[1] = 2
+    @test strategy.keys == [1]
+    @test get(cache, 1, 0) == 2
+end
+
+@testset "timeout preserves a different entry with the same timestamp" begin
+    cache = Cache{Int, Int}(ExpireOnTimeout(Dates.Millisecond(50)))
+    cache[1] = 1
+    previous = cache.cache[1]
+    replacement = ExpiringCaches.TimestampedValue{Int}(2, previous.timestamp)
+    cache.cache[1] = replacement
+    sleep(0.15)
+    @test get(cache.cache, 1, nothing) === replacement
+end
 
 @testset "get! cached nothing" begin
     for V in (Nothing, Union{Nothing, Int})
@@ -109,6 +142,7 @@ sleep(2.5)
 @test !isempty(cache)
 sleep(3)
 # key is now purged w/o being accessed
+@test length(cache) == 0
 @test isempty(cache)
 
 end

@@ -41,11 +41,10 @@ end
 expired(x::TimestampedValue, s::ExpireOnAccess) = expired(x, s.timeout)
 
 """
-A value is evicted if it was present in cache longer then `timeout`.
-The eviction occurs immediately after expiration timeout.
-An async task will be spawned for each key upon entry. When the
-timeout task has waited `timeout` length of time, the key will be removed
-from the cache.
+A value is evicted by a timer after `timeout`, without requiring access to
+the cache. A timer is created for each stored value. Its callback removes
+that value only if it is still current, so replacing a value starts a new
+expiration period. Callback execution may be delayed by other tasks.
 """
 struct ExpireOnTimeout{P <: Dates.Period} <: AbstractStrategy
     timeout::P
@@ -65,11 +64,9 @@ amount of time. To avoid using the cache (i.e. to invalidate the cache),
 a `Cache` supports the `delete!` and `empty!` methods to remove values
 manually.
 
-By default, expired keys will remain in the cache until requested (via
-`haskey` or `get`); if `purge_on_timeout=true` keyword argument is passed,
-then an async task will be spawned for each key upon entry. When the
-timeout task has waited `timeout` length of time, the key will be removed
-from the cache.
+By default, `ExpireOnAccess` keeps expired keys until they are requested
+via `haskey` or `get`. Pass `ExpireOnTimeout(timeout)` as the strategy to
+remove expired values through timer callbacks without accessing the cache.
 """
 struct Cache{K, V, S <: AbstractStrategy} <: AbstractDict{K, V}
     lock::ReentrantLock
@@ -78,6 +75,8 @@ struct Cache{K, V, S <: AbstractStrategy} <: AbstractDict{K, V}
 end
 Cache{K, V}(strategy::S = ExpireOnAccess(Dates.Minute(1))) where {K, V, S <: AbstractStrategy} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), strategy)
 Cache{K, V}(timeout::Dates.Period) where {K, V} = Cache{K,V}(ExpireOnAccess(timeout))
+
+expire!(val, key, cache::Cache) = expire!(val, key, cache.strategy)
 
 function Base.iterate(x::Cache)
     lock(x.lock)
@@ -134,7 +133,7 @@ function Base.setindex!(cache::Cache{K, V}, val::V, key::K) where {K, V}
     lock(cache.lock) do
         val_ts = TimestampedValue{V}(val)
         cache.cache[key] = val_ts
-        expire!(val_ts, key, cache.strategy)
+        expire!(val_ts, key, cache)
         return val
     end
 end
@@ -261,13 +260,10 @@ function getcache end
 # end
 
 function expire!(val::TimestampedValue{V}, key::K,
-                 cache::Cache{K,V,ExpireOnTimeout}) where {K, V}
-    ts = timestamp(val)
-    Timer(div(Dates.toms(s.timeout), 1000)) do _
+                 cache::Cache{K,V,<:ExpireOnTimeout}) where {K, V}
+    Timer(Dates.toms(cache.strategy.timeout) / 1000) do _
         lock(cache.lock) do
-            val2 = get(cache.cache, key, nothing)
-            # only delete if timestamp of original key matches
-            if val2 !== nothing && timestamp(val2) == ts
+            if get(cache.cache, key, nothing) === val
                 delete!(cache.cache, key)
             end
         end
