@@ -170,18 +170,34 @@ function Base.get!(cache::Cache{K, V}, key::K, default::V) where {K, V}
     end
 end
 
+"""
+    get!(f::Function, cache::ExpiringCaches.Cache, key)
+
+Return the unexpired value for `key`, or compute and cache `f()` outside the
+cache lock. Other keys remain accessible while `f()` runs. Concurrent callers
+may compute the same key more than once; if another caller stores an unexpired
+value before `f()` finishes, return that value instead of overwriting it.
+"""
 function Base.get!(f::Function, cache::Cache{K, V}, key::K) where {K, V}
-    lock(cache.lock) do
+    val = lock(cache.lock) do
         if haskey(cache.cache, key)
             x = cache.cache[key]
-            if expired(x, cache.strategy)
-                return setindex!(cache, f()::V, key)
-            else
+            if !expired(x, cache.strategy)
+                return x
+            end
+        end
+        return nothing
+    end
+    val !== nothing && return val.value
+    computed = f()::V
+    return lock(cache.lock) do
+        if haskey(cache.cache, key)
+            x = cache.cache[key]
+            if !expired(x, cache.strategy)
                 return x.value
             end
-        else
-            return setindex!(cache, f()::V, key)
         end
+        setindex!(cache, computed, key)
     end
 end
 

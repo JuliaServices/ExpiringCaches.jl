@@ -43,6 +43,55 @@ cache[1] = 5
 @test !isempty(cache)
 @test isempty(empty!(cache))
 
+@testset "get! cached nothing" begin
+    for V in (Nothing, Union{Nothing, Int})
+        cache = Cache{Int, V}(Dates.Minute(1))
+        cache[1] = nothing
+        calls = Ref(0)
+        @test get!(() -> (calls[] += 1; nothing), cache, 1) === nothing
+        @test calls[] == 0
+    end
+end
+
+@testset "get! permits access to another key" begin
+    cache = Cache{Int, Int}(Dates.Minute(1))
+    started = Channel{Nothing}(1)
+    release = Channel{Nothing}(1)
+    first = @async get!(cache, 1) do
+        put!(started, nothing)
+        take!(release)
+        1
+    end
+    take!(started)
+    second = @async get!(() -> 2, cache, 2)
+    status = timedwait(() -> istaskdone(second), 5.0)
+    put!(release, nothing)
+    @test status == :ok
+    @test fetch(first) == 1
+    @test fetch(second) == 2
+end
+
+@testset "get! preserves a newer value" begin
+    for newer in (nothing, 99)
+        cache = Cache{Int, Union{Nothing, Int}}(Dates.Minute(1))
+        started = Channel{Nothing}(1)
+        release = Channel{Nothing}(1)
+        pending = @async get!(cache, 1) do
+            put!(started, nothing)
+            take!(release)
+            5
+        end
+        take!(started)
+        writer = @async setindex!(cache, newer, 1)
+        status = timedwait(() -> istaskdone(writer), 5.0)
+        put!(release, nothing)
+        @test status == :ok
+        fetch(writer)
+        @test fetch(pending) === newer
+        @test get(cache, 1, nothing) === newer
+    end
+end
+
 @test foo(1, "ffff") == 0.25
 tm = @elapsed foo(1, "ffff")
 @test tm < 2 # test that normal function body wasn't executed
