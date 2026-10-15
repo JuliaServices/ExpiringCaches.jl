@@ -2,7 +2,7 @@ module ExpiringCaches
 
 using Dates
 
-export Cache, @cacheable, ExpireOnAccess, ExpireOnTimeout
+export Cache, @cacheable
 
 struct TimestampedValue{T}
     value::T
@@ -30,10 +30,10 @@ Set trigger for expiration of the (`key`,`val`) pair given the strategy.
 function expire!(val::V, key::K, s::S) where {K, V, S <: AbstractStrategy} end
 
 """
-A value is evicted if it was present in cache longer then `timeout`.
-The eviction occurs during the access to the cached value.
-Expired keys will remain in the cache until requested (via
-`haskey` or `get`).
+    ExpiringCaches.ExpireOnAccess(timeout::Dates.Period)
+
+Treat values older than `timeout` as missing. An expired value stays in memory
+until its key is accessed (`haskey`, `get`, `get!`) or replaced.
 """
 struct ExpireOnAccess{P <: Dates.Period} <: AbstractStrategy
     timeout::P
@@ -41,8 +41,10 @@ end
 expired(x::TimestampedValue, s::ExpireOnAccess) = expired(x, s.timeout)
 
 """
-A value is evicted by a timer after `timeout`, without requiring access to
-the cache. A timer is created for each stored value. Its callback removes
+    ExpiringCaches.ExpireOnTimeout(timeout::Dates.Period)
+
+Remove each value with a timer `timeout` after it is stored, without requiring
+access to the cache. A timer is created for each stored value. Its callback removes
 that value only if it is still current, so replacing a value starts a new
 expiration period. Callback execution may be delayed by other tasks.
 """
@@ -52,10 +54,12 @@ end
 expired(x::TimestampedValue, s::ExpireOnTimeout) = expired(x, s.timeout)
 
 """
-    ExpiringCaches.Cache{K, V}(strategy::AbstractStrategy)
+    ExpiringCaches.Cache{K, V}(strategy::AbstractStrategy=ExpireOnAccess(Dates.Minute(1)))
+    ExpiringCaches.Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false)
 
-Create a thread-safe, expiring cache where value eviction  is determined by
-`strategy`.
+Create a thread-safe, expiring cache whose values expire according to
+`strategy`. The `timeout` form uses `ExpireOnAccess(timeout)`, or
+`ExpireOnTimeout(timeout)` when `purge_on_timeout=true`.
 
 An `ExpiringCaches.Cache` is an `AbstractDict` and tries to emulate a regular
 `Dict` in all respects. It is most useful when the cost of retrieving or
@@ -63,10 +67,6 @@ calculating a value is expensive and is able to be "cached" for a certain
 amount of time. To avoid using the cache (i.e. to invalidate the cache),
 a `Cache` supports the `delete!` and `empty!` methods to remove values
 manually.
-
-By default, `ExpireOnAccess` keeps expired keys until they are requested
-via `haskey` or `get`. Pass `ExpireOnTimeout(timeout)` as the strategy to
-remove expired values through timer callbacks without accessing the cache.
 """
 struct Cache{K, V, S <: AbstractStrategy} <: AbstractDict{K, V}
     lock::ReentrantLock
@@ -74,7 +74,8 @@ struct Cache{K, V, S <: AbstractStrategy} <: AbstractDict{K, V}
     strategy::S
 end
 Cache{K, V}(strategy::S = ExpireOnAccess(Dates.Minute(1))) where {K, V, S <: AbstractStrategy} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), strategy)
-Cache{K, V}(timeout::Dates.Period) where {K, V} = Cache{K,V}(ExpireOnAccess(timeout))
+Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false) where {K, V} =
+    Cache{K,V}(purge_on_timeout ? ExpireOnTimeout(timeout) : ExpireOnAccess(timeout))
 
 expire!(val, key, cache::Cache) = expire!(val, key, cache.strategy)
 
