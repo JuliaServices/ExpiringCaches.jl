@@ -1,5 +1,5 @@
 using Test, Dates, ExpiringCaches
-using ExpiringCaches: @cacheable
+using ExpiringCaches: @cacheable, ExpireOnAccess, ExpireOnTimeout
 
 """
     foo(arg1::Int, arg2::String)
@@ -117,6 +117,11 @@ end
     @test length(cache) == 1
     @test timedwait(() -> length(cache) == 0, 5.0) == :ok
     @test isempty(cache)
+end
+
+@testset "purge_on_timeout keyword" begin
+    @test Cache{Int, Int}(Dates.Second(1)).strategy === ExpireOnAccess(Dates.Second(1))
+    @test Cache{Int, Int}(Dates.Second(1); purge_on_timeout=true).strategy === ExpireOnTimeout(Dates.Second(1))
 end
 
 @testset "custom strategy expiration hook" begin
