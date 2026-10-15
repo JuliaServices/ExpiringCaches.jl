@@ -137,6 +137,23 @@ end
     @test get(cache.cache, 1, nothing) === replacement
 end
 
+@testset "expired entries are neither counted nor collected" begin
+    cache = Cache{String, Int}(Dates.Millisecond(1))
+    cache["a"] = 1
+    cache["b"] = 2
+    sleep(0.05)
+    @test length(cache) == 0
+    @test isempty(collect(cache))
+    @test isempty(collect(keys(cache)))
+    @test isempty(collect(values(cache)))
+    live = Cache{String, Int}(Dates.Minute(1))
+    live["c"] = 3
+    @test length(live) == 1
+    @test collect(live) == ["c" => 3]
+    @test collect(keys(live)) == ["c"]
+    @test first(live) === ("c" => 3)
+end
+
 @testset "get! cached nothing" begin
     for V in (Nothing, Union{Nothing, Int})
         cache = Cache{Int, V}(Dates.Minute(1))

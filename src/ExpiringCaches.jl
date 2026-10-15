@@ -78,40 +78,16 @@ Cache{K, V}(timeout::Dates.Period) where {K, V} = Cache{K,V}(ExpireOnAccess(time
 
 expire!(val, key, cache::Cache) = expire!(val, key, cache.strategy)
 
-function Base.iterate(x::Cache)
-    lock(x.lock)
-    state = iterate(x.cache)
-    if state === nothing
-        unlock(x.lock)
-        return nothing
-    end
-    while expired(state[1][2], x.strategy)
-        state = iterate(x.cache, state[2])
-        if state === nothing
-            unlock(x.lock)
-            return nothing
+function Base.iterate(x::Cache, st...)
+    return lock(x.lock) do
+        state = iterate(x.cache, st...)
+        while state !== nothing && expired(state[1][2], x.strategy)
+            state = iterate(x.cache, state[2])
         end
+        state === nothing && return nothing
+        (k, v), next = state
+        return k => v.value, next
     end
-    unlock(x.lock)
-    return (state[1][1], state[1][2].value), state[2]
-end
-
-function Base.iterate(x::Cache, st)
-    lock(x.lock)
-    state = iterate(x.cache, st)
-    if state === nothing
-        unlock(x.lock)
-        return nothing
-    end
-    while expired(state[1][2], x.strategy)
-        state = iterate(x.cache, state[2])
-        if state === nothing
-            unlock(x.lock)
-            return nothing
-        end
-    end
-    unlock(x.lock)
-    return (state[1][1], state[1][2].value), state[2]
 end
 
 function Base.haskey(cache::Cache{K, V}, k::K) where {K, V}
@@ -202,7 +178,9 @@ end
 
 Base.delete!(cache::Cache{K}, key::K) where {K} = lock(() -> delete!(cache.cache, key), cache.lock)
 Base.empty!(cache::Cache) = lock(() -> empty!(cache.cache), cache.lock)
-Base.length(cache::Cache) = length(cache.cache)
+Base.length(cache::Cache) = lock(() -> count(x -> !expired(x, cache.strategy), values(cache.cache)), cache.lock)
+# entries can expire between `length` and iteration, so collecting must not preallocate
+Base.IteratorSize(::Type{<:Union{Cache, Base.KeySet{<:Any, <:Cache}, Base.ValueIterator{<:Cache}}}) = Base.SizeUnknown()
 
 """
     @cacheable strategy function_definition::ReturnType
