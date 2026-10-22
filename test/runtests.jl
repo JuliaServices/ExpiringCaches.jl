@@ -159,6 +159,22 @@ end
     @test first(live) === ("c" => 3)
 end
 
+@testset "indexing and lookups like a Dict" begin
+    cache = Cache{Int, Int}(Dates.Minute(1))
+    cache[1] = 2
+    @test cache[1] == 2
+    @test_throws KeyError cache[3]
+    @test get(cache, 1, nothing) == 2
+    @test get(cache, 3, nothing) === nothing
+    @test haskey(cache, 1.0)
+    @test get(cache, 1.0, 0) == 2
+    stale = Cache{Int, Int}(Dates.Millisecond(1))
+    stale[1] = 2
+    sleep(0.05)
+    @test_throws KeyError stale[1]
+    @test isempty(stale.cache)
+end
+
 @testset "get! cached nothing" begin
     for V in (Nothing, Union{Nothing, Int})
         cache = Cache{Int, V}(Dates.Minute(1))

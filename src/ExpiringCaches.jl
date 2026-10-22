@@ -91,7 +91,7 @@ function Base.iterate(x::Cache, st...)
     end
 end
 
-function Base.haskey(cache::Cache{K, V}, k::K) where {K, V}
+function Base.haskey(cache::Cache, k)
     lock(cache.lock) do
         if haskey(cache.cache, k)
             x = cache.cache[k]
@@ -115,7 +115,9 @@ function Base.setindex!(cache::Cache{K, V}, val::V, key::K) where {K, V}
     end
 end
 
-function Base.get(cache::Cache{K, V}, key::K, default::V) where {K, V}
+# `default` is untyped, like Dict's: AbstractDict's `getindex` calls `get` with a
+# private sentinel default
+function Base.get(cache::Cache, key, default)
     lock(cache.lock) do
         if haskey(cache.cache, key)
             x = cache.cache[key]
