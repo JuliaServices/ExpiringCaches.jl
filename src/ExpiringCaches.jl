@@ -179,8 +179,14 @@ function Base.get!(f::Function, cache::Cache{K, V}, key::K) where {K, V}
     end
 end
 
-Base.delete!(cache::Cache{K}, key::K) where {K} = lock(() -> delete!(cache.cache, key), cache.lock)
-Base.empty!(cache::Cache) = lock(() -> empty!(cache.cache), cache.lock)
+function Base.delete!(cache::Cache{K}, key::K) where {K}
+    lock(() -> delete!(cache.cache, key), cache.lock)
+    return cache
+end
+function Base.empty!(cache::Cache)
+    lock(() -> empty!(cache.cache), cache.lock)
+    return cache
+end
 Base.length(cache::Cache) = lock(() -> count(x -> !expired(x, cache.strategy), values(cache.cache)), cache.lock)
 # entries can expire between `length` and iteration, so collecting must not preallocate
 Base.IteratorSize(::Type{<:Union{Cache, Base.KeySet{<:Any, <:Cache}, Base.ValueIterator{<:Cache}}}) = Base.SizeUnknown()
