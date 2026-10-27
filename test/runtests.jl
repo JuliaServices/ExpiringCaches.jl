@@ -74,10 +74,13 @@ sleep(5)
 
 @test get!(()->4, cache, 1) == 4
 
-@test isempty(delete!(cache, 1))
+# like Dict, delete! and empty! return the cache, not its internal Dict
+@test delete!(cache, 1) === cache
+@test isempty(cache)
 cache[1] = 5
 @test !isempty(cache)
-@test isempty(empty!(cache))
+@test empty!(cache) === cache
+@test isempty(cache)
 
 @testset "cacheable function signatures" begin
     @test cached_untyped(1, 2) === nothing
