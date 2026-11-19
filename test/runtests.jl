@@ -52,6 +52,13 @@ module SelectiveImport
     @cacheable Minute(1) plusone(x::Int)::Int = x + 1
 end
 
+# @noinline so no caller frame keeps the value alive
+@noinline function store_new!(cache, i)
+    value = [i]
+    cache[1] = value
+    return WeakRef(value)
+end
+
 struct RecordingStrategy <: ExpiringCaches.AbstractStrategy
     keys::Vector{Int}
 end
@@ -130,6 +137,23 @@ end
     @test length(cache) == 1
     @test timedwait(() -> length(cache) == 0, 5.0) == :ok
     @test isempty(cache)
+end
+
+@testset "timeout keeps only the current value alive" begin
+    cache = Cache{Int, Vector{Int}}(ExpireOnTimeout(Dates.Second(3)))
+    replaced = [store_new!(cache, i) for i in 1:3]
+    sleep(1.5)
+    current = store_new!(cache, 4)
+    GC.gc(true)
+    @test all(ref -> ref.value === nothing, replaced)
+    # the first value's timeout has passed; the current value has 1s left
+    sleep(2)
+    @test haskey(cache, 1)
+    @test timedwait(() -> (GC.gc(true); current.value === nothing), 5.0) == :ok
+    deleted = store_new!(cache, 5)
+    delete!(cache, 1)
+    GC.gc(true)
+    @test deleted.value === nothing
 end
 
 @testset "purge_on_timeout keyword" begin
