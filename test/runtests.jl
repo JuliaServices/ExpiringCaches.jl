@@ -251,6 +251,27 @@ end
     end
 end
 
+@testset "get! does not cache a value computed before delete! or empty!" begin
+    for invalidate! in (cache -> delete!(cache, 1), empty!)
+        cache = Cache{Int, String}(Dates.Minute(1))
+        source = Ref("old")
+        started = Channel{Nothing}(1)
+        release = Channel{Nothing}(1)
+        pending = @async get!(cache, 1) do
+            value = source[]
+            put!(started, nothing)
+            take!(release)
+            value
+        end
+        take!(started)
+        source[] = "new"
+        invalidate!(cache)
+        put!(release, nothing)
+        @test fetch(pending) == "old"
+        @test get!(() -> source[], cache, 1) == "new"
+    end
+end
+
 @test foo(1, "ffff") == 0.25
 tm = @elapsed foo(1, "ffff")
 @test tm < 2 # test that normal function body wasn't executed
