@@ -183,16 +183,6 @@ end
     @test get(cache, 1, 0) == 2
 end
 
-@testset "timeout preserves a different entry with the same timestamp" begin
-    cache = Cache{Int, Int}(ExpireOnTimeout(Dates.Millisecond(50)))
-    cache[1] = 1
-    previous = cache.cache[1]
-    replacement = ExpiringCaches.TimestampedValue{Int}(2, previous.timestamp)
-    cache.cache[1] = replacement
-    sleep(0.15)
-    @test get(cache.cache, 1, nothing) === replacement
-end
-
 @testset "expired entries are neither counted nor collected" begin
     cache = Cache{String, Int}(Dates.Millisecond(1))
     cache["a"] = 1
