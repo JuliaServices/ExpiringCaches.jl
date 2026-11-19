@@ -72,8 +72,11 @@ struct Cache{K, V, S <: AbstractStrategy} <: AbstractDict{K, V}
     lock::ReentrantLock
     cache::Dict{K, TimestampedValue{V}}
     strategy::S
+    # counts delete! and empty! calls so get!(f, ...) can tell when one ran during f()
+    # ponytail: one count for all keys; a delete! of any key skips caching every in-flight result
+    invalidations::Base.RefValue{Int}
 end
-Cache{K, V}(strategy::S = ExpireOnAccess(Dates.Minute(1))) where {K, V, S <: AbstractStrategy} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), strategy)
+Cache{K, V}(strategy::S = ExpireOnAccess(Dates.Minute(1))) where {K, V, S <: AbstractStrategy} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), strategy, Ref(0))
 Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false) where {K, V} =
     Cache{K,V}(purge_on_timeout ? ExpireOnTimeout(timeout) : ExpireOnAccess(timeout))
 
@@ -154,17 +157,19 @@ end
 Return the unexpired value for `key`, or compute and cache `f()` outside the
 cache lock. Other keys remain accessible while `f()` runs. Concurrent callers
 may compute the same key more than once; if another caller stores an unexpired
-value before `f()` finishes, return that value instead of overwriting it.
+value before `f()` finishes, return that value instead of overwriting it. If
+`delete!` or `empty!` runs on the cache while `f()` runs, return `f()`'s result
+without caching it, since it may reflect data from before that invalidation.
 """
 function Base.get!(f::Function, cache::Cache{K, V}, key::K) where {K, V}
-    val = lock(cache.lock) do
+    val, invalidations = lock(cache.lock) do
         if haskey(cache.cache, key)
             x = cache.cache[key]
             if !expired(x, cache.strategy)
-                return x
+                return x, cache.invalidations[]
             end
         end
-        return nothing
+        return nothing, cache.invalidations[]
     end
     val !== nothing && return val.value
     computed = f()::V
@@ -175,16 +180,23 @@ function Base.get!(f::Function, cache::Cache{K, V}, key::K) where {K, V}
                 return x.value
             end
         end
+        cache.invalidations[] == invalidations || return computed
         setindex!(cache, computed, key)
     end
 end
 
 function Base.delete!(cache::Cache{K}, key::K) where {K}
-    lock(() -> delete!(cache.cache, key), cache.lock)
+    lock(cache.lock) do
+        delete!(cache.cache, key)
+        cache.invalidations[] += 1
+    end
     return cache
 end
 function Base.empty!(cache::Cache)
-    lock(() -> empty!(cache.cache), cache.lock)
+    lock(cache.lock) do
+        empty!(cache.cache)
+        cache.invalidations[] += 1
+    end
     return cache
 end
 Base.length(cache::Cache) = lock(() -> count(x -> !expired(x, cache.strategy), values(cache.cache)), cache.lock)
