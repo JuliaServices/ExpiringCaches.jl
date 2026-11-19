@@ -12,7 +12,9 @@ end
 TimestampedValue(x::T) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
 TimestampedValue{T}(x) where {T} = TimestampedValue{T}(x, Dates.now(Dates.UTC))
 timestamp(x::TimestampedValue) = x.timestamp
-expired(x::TimestampedValue, timeout) =  (Dates.now(Dates.UTC) - x.timestamp) > timeout
+# Dates.toms also converts Month, Quarter, and Year, which can't be compared with Millisecond;
+# the ExpireOnTimeout timer uses the same conversion
+expired(x::TimestampedValue, timeout) = Dates.value(Dates.now(Dates.UTC) - x.timestamp) > Dates.toms(timeout)
 
 """
 Abstract type for cache eviction policy
