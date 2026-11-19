@@ -46,9 +46,11 @@ expired(x::TimestampedValue, s::ExpireOnAccess) = expired(x, s.timeout)
     ExpiringCaches.ExpireOnTimeout(timeout::Dates.Period)
 
 Remove each value with a timer `timeout` after it is stored, without requiring
-access to the cache. A timer is created for each stored value. Its callback removes
-that value only if it is still current, so replacing a value starts a new
-expiration period. Callback execution may be delayed by other tasks.
+access to the cache. Each key has at most one pending timer. When it fires, it
+removes the key's value if that value has expired; if the value was replaced in
+the meantime, the timer waits until the new value expires. Replacing a value
+therefore starts a new expiration period. Callback execution may be delayed by
+other tasks.
 """
 struct ExpireOnTimeout{P <: Dates.Period} <: AbstractStrategy
     timeout::P
@@ -77,8 +79,11 @@ struct Cache{K, V, S <: AbstractStrategy} <: AbstractDict{K, V}
     # counts delete! and empty! calls so get!(f, ...) can tell when one ran during f()
     # ponytail: one count for all keys; a delete! of any key skips caching every in-flight result
     invalidations::Base.RefValue{Int}
+    # ExpireOnTimeout: keys with a pending timer. delete! and empty! leave keys here
+    # until their timer fires, so no key ever has two timers.
+    timed::Set{K}
 end
-Cache{K, V}(strategy::S = ExpireOnAccess(Dates.Minute(1))) where {K, V, S <: AbstractStrategy} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), strategy, Ref(0))
+Cache{K, V}(strategy::S = ExpireOnAccess(Dates.Minute(1))) where {K, V, S <: AbstractStrategy} = Cache(ReentrantLock(), Dict{K, TimestampedValue{V}}(), strategy, Ref(0), Set{K}())
 Cache{K, V}(timeout::Dates.Period; purge_on_timeout::Bool=false) where {K, V} =
     Cache{K,V}(purge_on_timeout ? ExpireOnTimeout(timeout) : ExpireOnAccess(timeout))
 
@@ -256,15 +261,30 @@ end
 
 function getcache end
 
+# A timer per stored value would keep every replaced value, and its timer task,
+# alive until that value's own timeout.
 function expire!(val::TimestampedValue{V}, key::K,
                  cache::Cache{K,V,<:ExpireOnTimeout}) where {K, V}
-    Timer(Dates.toms(cache.strategy.timeout) / 1000) do _
+    key in cache.timed && return
+    push!(cache.timed, key)
+    evict_after(cache, key, Dates.toms(cache.strategy.timeout))
+    return
+end
+
+function evict_after(cache::Cache, key, ms)
+    Timer(ms / 1000) do _
         lock(cache.lock) do
-            if get(cache.cache, key, nothing) === val
-                delete!(cache.cache, key)
+            x = get(cache.cache, key, nothing)
+            if x !== nothing && !expired(x, cache.strategy)
+                age = Dates.value(Dates.now(Dates.UTC) - x.timestamp)
+                # 1 ms extra, so the age read in whole milliseconds is past the timeout
+                return evict_after(cache, key, Dates.toms(cache.strategy.timeout) - age + 1)
             end
+            delete!(cache.cache, key)
+            delete!(cache.timed, key)
         end
     end
+    return
 end
 
 using PrecompileTools

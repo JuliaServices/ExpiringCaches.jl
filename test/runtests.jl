@@ -52,6 +52,13 @@ module SelectiveImport
     @cacheable Minute(1) plusone(x::Int)::Int = x + 1
 end
 
+# @noinline so no caller frame keeps the value alive
+@noinline function store_new!(cache, i)
+    value = [i]
+    cache[1] = value
+    return WeakRef(value)
+end
+
 struct RecordingStrategy <: ExpiringCaches.AbstractStrategy
     keys::Vector{Int}
 end
@@ -132,6 +139,23 @@ end
     @test isempty(cache)
 end
 
+@testset "timeout keeps only the current value alive" begin
+    cache = Cache{Int, Vector{Int}}(ExpireOnTimeout(Dates.Second(3)))
+    replaced = [store_new!(cache, i) for i in 1:3]
+    sleep(1.5)
+    current = store_new!(cache, 4)
+    GC.gc(true)
+    @test all(ref -> ref.value === nothing, replaced)
+    # the first value's timeout has passed; the current value has 1s left
+    sleep(2)
+    @test haskey(cache, 1)
+    @test timedwait(() -> (GC.gc(true); current.value === nothing), 5.0) == :ok
+    deleted = store_new!(cache, 5)
+    delete!(cache, 1)
+    GC.gc(true)
+    @test deleted.value === nothing
+end
+
 @testset "purge_on_timeout keyword" begin
     @test Cache{Int, Int}(Dates.Second(1)).strategy === ExpireOnAccess(Dates.Second(1))
     @test Cache{Int, Int}(Dates.Second(1); purge_on_timeout=true).strategy === ExpireOnTimeout(Dates.Second(1))
@@ -157,16 +181,6 @@ end
     cache[1] = 2
     @test strategy.keys == [1]
     @test get(cache, 1, 0) == 2
-end
-
-@testset "timeout preserves a different entry with the same timestamp" begin
-    cache = Cache{Int, Int}(ExpireOnTimeout(Dates.Millisecond(50)))
-    cache[1] = 1
-    previous = cache.cache[1]
-    replacement = ExpiringCaches.TimestampedValue{Int}(2, previous.timestamp)
-    cache.cache[1] = replacement
-    sleep(0.15)
-    @test get(cache.cache, 1, nothing) === replacement
 end
 
 @testset "expired entries are neither counted nor collected" begin
