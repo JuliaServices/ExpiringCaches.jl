@@ -226,15 +226,16 @@ macro cacheable(strategy, func)
     internalSig = Expr(:(::), Expr(:call, internalFuncName, funcArgs...), returnType)
     internalFunction = Expr(:function, internalSig, functionBody)
     cacheName = gensym()
+    # package and Base functions are interpolated so they resolve the same in any caller module
     return esc(quote
-        const $cacheName = ExpiringCaches.Cache{Tuple{$(argTypes...)}, $returnType}($strategy)
+        const $cacheName = $Cache{Tuple{$(argTypes...)}, $returnType}($strategy)
         $internalFunction
         Base.@__doc__ function $funcName($(funcArgs...))::$returnType
-            return get!($cacheName, tuple($(argNames...))) do
+            return $get!($cacheName, $tuple($(argNames...))) do
                 $internalFuncName($(argNames...))
             end
         end
-        ExpiringCaches.getcache(f::typeof($funcName)) = $cacheName
+        $ExpiringCaches.getcache(f::typeof($funcName)) = $cacheName
         $funcName
     end)
 end
