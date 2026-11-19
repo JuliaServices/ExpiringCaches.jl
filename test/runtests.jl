@@ -45,6 +45,13 @@ end
     one + 1
 end
 
+module SelectiveImport
+    using ExpiringCaches: @cacheable
+    using Dates: Minute
+    get!(x) = x
+    @cacheable Minute(1) plusone(x::Int)::Int = x + 1
+end
+
 struct RecordingStrategy <: ExpiringCaches.AbstractStrategy
     keys::Vector{Int}
 end
@@ -111,6 +118,9 @@ cache[1] = 5
     @test QualifiedCacheable.cached(1) == 2
     @test QualifiedCacheable.cached(1) == 2
     @test QualifiedCacheable.calls[] == 1
+
+    # the module imports only the macro and has its own get!
+    @test SelectiveImport.plusone(1) == 2
 end
 
 @testset "timeout evicts stored values" begin
