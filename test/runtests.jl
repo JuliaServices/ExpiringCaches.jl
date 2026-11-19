@@ -127,6 +127,20 @@ end
     @test Cache{Int, Int}(Dates.Second(1); purge_on_timeout=true).strategy === ExpireOnTimeout(Dates.Second(1))
 end
 
+@testset "calendar period timeouts" begin
+    for strategy in (ExpireOnAccess, ExpireOnTimeout), timeout in (Dates.Month(1), Dates.Year(1))
+        cache = Cache{Int, Int}(strategy(timeout))
+        cache[1] = 2
+        @test cache[1] == 2
+        @test length(cache) == 1
+    end
+    # a month is 30.436875 days, as Dates.toms counts it
+    month = ExpireOnAccess(Dates.Month(1))
+    stored(age) = ExpiringCaches.TimestampedValue{Int}(1, Dates.now(Dates.UTC) - age)
+    @test !ExpiringCaches.expired(stored(Dates.Day(30)), month)
+    @test ExpiringCaches.expired(stored(Dates.Day(31)), month)
+end
+
 @testset "custom strategy expiration hook" begin
     strategy = RecordingStrategy(Int[])
     cache = Cache{Int, Int}(strategy)
